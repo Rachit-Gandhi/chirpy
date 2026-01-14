@@ -60,31 +60,28 @@ func respondWithError(resp http.ResponseWriter, errorCode int, errorMessage stri
 	resp.Write(dat)
 }
 
-func validateChirpHandler(resp http.ResponseWriter, req *http.Request) {
+func validateChirpHandler(req *http.Request) (map[string]string, error) {
 	type reqParameter struct {
-		Body string `json:"body"`
+		Body   string `json:"body"`
+		UserId string `json:"user_id"`
 	}
 	request := reqParameter{}
-	resp.Header().Set("Content-Type", "application/json")
 	decoder := json.NewDecoder(req.Body)
 	defer req.Body.Close()
 	err := decoder.Decode(&request)
 	if err != nil {
-		respondWithError(resp, 500, "Something went wrong")
-		return
+		return map[string]string{}, err
 	}
 	if len(request.Body) > 140 {
-		respondWithError(resp, 400, "Chirp is too long")
-		return
+		return map[string]string{}, fmt.Errorf("chirp too long, has to be less than 140 characters")
 	}
-	resp.WriteHeader(200)
 	for _, badWord := range []string{"Kerfuffle", "Sharbert", "Fornax"} {
 		request.Body = strings.ReplaceAll(request.Body, badWord, "****")
 		request.Body = strings.ReplaceAll(request.Body, strings.ToLower(badWord), "****")
 		request.Body = strings.ReplaceAll(request.Body, strings.ToUpper(badWord), "****")
 	}
-	dat, _ := json.Marshal((map[string]string{"cleaned_body": request.Body}))
-	resp.Write(dat)
+	dat := map[string]string{"cleaned_body": request.Body, "user_id": request.UserId}
+	return dat, nil
 }
 
 func (cfg *apiConfig) createUserHandler(resp http.ResponseWriter, req *http.Request) {
@@ -121,4 +118,39 @@ func (cfg *apiConfig) createUserHandler(resp http.ResponseWriter, req *http.Requ
 	resp.WriteHeader(201)
 
 	resp.Write(dat)
+}
+
+func (cfg *apiConfig) createChirpHandler(resp http.ResponseWriter, req *http.Request) {
+	cleanChirp, err := validateChirpHandler(req)
+	if err != nil {
+		respondWithError(resp, 400, fmt.Sprintf("chirp validation failed: %v", err))
+	}
+
+	defer req.Body.Close()
+	user_id, err := uuid.Parse(cleanChirp["user_id"])
+	if err != nil {
+		respondWithError(resp, 400, "error with userId")
+	}
+	newChirp := database.CreateChirpParams{
+		Body:   cleanChirp["cleaned_body"],
+		UserID: user_id,
+	}
+	dbChirp, err := cfg.dbQueries.CreateChirp(req.Context(), newChirp)
+	if err != nil {
+		respondWithError(resp, 500, "issue with creating chirp")
+	}
+	chirp := Chirp{
+		ID:        dbChirp.ID,
+		UserID:    dbChirp.UserID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body:      dbChirp.Body,
+	}
+	finalChirp, err := json.Marshal(chirp)
+	if err != nil {
+		respondWithError(resp, 500, "issue with marshalling")
+	}
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(201)
+	resp.Write(finalChirp)
 }
