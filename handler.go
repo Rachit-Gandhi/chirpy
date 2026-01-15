@@ -154,3 +154,54 @@ func (cfg *apiConfig) createChirpHandler(resp http.ResponseWriter, req *http.Req
 	resp.WriteHeader(201)
 	resp.Write(finalChirp)
 }
+
+func (cfg *apiConfig) getChirpsHandler(resp http.ResponseWriter, req *http.Request) {
+	chirps, err := cfg.dbQueries.GetChirps(req.Context())
+	if err != nil {
+		respondWithError(resp, 500, fmt.Sprintf("error getting chirps: %w", err))
+	}
+	chirpsResp := []Chirp{}
+	for _, chirp := range chirps {
+		chirpResp := Chirp{
+			ID:        chirp.ID,
+			CreatedAt: chirp.CreatedAt,
+			UpdatedAt: chirp.UpdatedAt,
+			Body:      chirp.Body,
+			UserID:    chirp.UserID,
+		}
+		chirpsResp = append(chirpsResp, chirpResp)
+	}
+	dat, err := json.Marshal(chirpsResp)
+	if err != nil {
+		respondWithError(resp, 500, fmt.Sprintf("error marshalling the chirps: %v", err))
+	}
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write(dat)
+}
+
+func (cfg *apiConfig) getChirpHandler(resp http.ResponseWriter, req *http.Request) {
+	uuidChirp, err := uuid.Parse(req.PathValue("chirpId"))
+	if err != nil {
+		respondWithError(resp, 404, "invalid uuid")
+	}
+	chirp, err := cfg.dbQueries.GetChirp(req.Context(), uuidChirp)
+	if err != nil {
+		respondWithError(resp, 404, "error not found chirp with uuid")
+	}
+	finChirp := Chirp{
+		ID:        chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body:      chirp.Body,
+		UserID:    chirp.UserID,
+	}
+	dat, err := json.Marshal(finChirp)
+	if err != nil {
+		respondWithError(resp, 404, "error marshalling json")
+	}
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write(dat)
+
+}

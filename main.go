@@ -56,9 +56,10 @@ func main() {
 	customHandler.HandleFunc("GET /api/healthz", readyHandler)
 	customHandler.HandleFunc("GET /admin/metrics", apiCfg.metricHandler)
 	customHandler.HandleFunc("POST /admin/reset", apiCfg.resetAdminHandler)
-	//customHandler.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
+	customHandler.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
 	customHandler.HandleFunc("POST /api/users", apiCfg.createUserHandler)
 	customHandler.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
+	customHandler.HandleFunc("GET /api/chirps/{chirpId}", apiCfg.getChirpHandler)
 	s := &http.Server{
 		Addr:    ":8080",
 		Handler: customHandler,
