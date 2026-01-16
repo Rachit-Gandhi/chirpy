@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
+	"github.com/Rachit-Gandhi/chirpy/internal/auth"
 	"github.com/Rachit-Gandhi/chirpy/internal/database"
 	"github.com/google/uuid"
 )
@@ -86,7 +86,8 @@ func validateChirpHandler(req *http.Request) (map[string]string, error) {
 
 func (cfg *apiConfig) createUserHandler(resp http.ResponseWriter, req *http.Request) {
 	type requestCreateUser struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	var request requestCreateUser
 	decoder := json.NewDecoder(req.Body)
@@ -97,11 +98,13 @@ func (cfg *apiConfig) createUserHandler(resp http.ResponseWriter, req *http.Requ
 		return
 	}
 	resp.Header().Set("Content-Type", "application/json")
+	hashedPassword, err := auth.HashPassword(request.Password)
+	if err != nil {
+		respondWithError(resp, 400, "error hashing password")
+	}
 	reqCreateUser := database.CreateUserParams{
-		ID:        uuid.New(),
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-		Email:     request.Email,
+		Email:          request.Email,
+		HashedPassword: hashedPassword,
 	}
 	dbUser, err := cfg.dbQueries.CreateUser(req.Context(), reqCreateUser)
 	user := User{
@@ -109,6 +112,7 @@ func (cfg *apiConfig) createUserHandler(resp http.ResponseWriter, req *http.Requ
 		CreatedAt: dbUser.CreatedAt,
 		UpdatedAt: dbUser.UpdatedAt,
 		Email:     dbUser.Email,
+		Password:  dbUser.HashedPassword,
 	}
 	dat, err := json.Marshal(user)
 	if err != nil {
@@ -204,4 +208,44 @@ func (cfg *apiConfig) getChirpHandler(resp http.ResponseWriter, req *http.Reques
 	resp.WriteHeader(200)
 	resp.Write(dat)
 
+}
+
+type LoginParams struct {
+	Password string `json:"password"`
+	Email    string `json:"email`
+}
+
+func (cfg *apiConfig) loginUser(resp http.ResponseWriter, req *http.Request) {
+	decoder := json.NewDecoder(req.Body)
+	var loginUser LoginParams
+	err := decoder.Decode(&loginUser)
+	if err != nil {
+		respondWithError(resp, 401, "incorrect email or password")
+		return
+	}
+	defer req.Body.Close()
+	user, err := cfg.dbQueries.GetUserByEmail(req.Context(), loginUser.Email)
+	if err != nil {
+		respondWithError(resp, 401, "incorrect email or password")
+		return
+	}
+	isok, err := auth.CheckPasswordHash(loginUser.Password, user.HashedPassword)
+	if !isok || err != nil {
+		respondWithError(resp, 401, "incorrect email or password")
+		return
+	}
+	User := UserLogin{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+	dat, err := json.Marshal(User)
+	if err != nil {
+		respondWithError(resp, 401, "incorrect email or password")
+		return
+	}
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write(dat)
 }
