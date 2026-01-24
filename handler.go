@@ -1,20 +1,44 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Rachit-Gandhi/chirpy/internal/auth"
 	"github.com/Rachit-Gandhi/chirpy/internal/database"
 	"github.com/google/uuid"
 )
 
+type contextKey string
+
+const userIDKey contextKey = "userID"
+
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg.fileserverHits.Add(1)
 		next.ServeHTTP(w, r)
+	})
+}
+
+func (cfg *apiConfig) middlewareJWTAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jwtSecret := cfg.jwtSecret
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			respondWithError(w, 401, "token not found")
+			return
+		}
+		userID, err := auth.ValidateJWT(token, jwtSecret)
+		if err != nil {
+			respondWithError(w, 401, fmt.Sprintf("user not found, %v", err))
+			return
+		}
+		ctx := context.WithValue(r.Context(), userIDKey, userID)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -60,15 +84,25 @@ func respondWithError(resp http.ResponseWriter, errorCode int, errorMessage stri
 	resp.Write(dat)
 }
 
-func validateChirpHandler(req *http.Request) (map[string]string, error) {
+func (cfg *apiConfig) validateChirp(resp http.ResponseWriter, req *http.Request) (map[string]string, error) {
+	jwtSecret := cfg.jwtSecret
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		return map[string]string{}, fmt.Errorf("token not found")
+
+	}
+	userID, err := auth.ValidateJWT(token, jwtSecret)
+	if err != nil {
+		return map[string]string{}, fmt.Errorf("user not found")
+	}
+
 	type reqParameter struct {
-		Body   string `json:"body"`
-		UserId string `json:"user_id"`
+		Body string `json:"body"`
 	}
 	request := reqParameter{}
 	decoder := json.NewDecoder(req.Body)
 	defer req.Body.Close()
-	err := decoder.Decode(&request)
+	err = decoder.Decode(&request)
 	if err != nil {
 		return map[string]string{}, err
 	}
@@ -80,7 +114,7 @@ func validateChirpHandler(req *http.Request) (map[string]string, error) {
 		request.Body = strings.ReplaceAll(request.Body, strings.ToLower(badWord), "****")
 		request.Body = strings.ReplaceAll(request.Body, strings.ToUpper(badWord), "****")
 	}
-	dat := map[string]string{"cleaned_body": request.Body, "user_id": request.UserId}
+	dat := map[string]string{"cleaned_body": request.Body, "user_id": userID.String()}
 	return dat, nil
 }
 
@@ -125,15 +159,17 @@ func (cfg *apiConfig) createUserHandler(resp http.ResponseWriter, req *http.Requ
 }
 
 func (cfg *apiConfig) createChirpHandler(resp http.ResponseWriter, req *http.Request) {
-	cleanChirp, err := validateChirpHandler(req)
+	cleanChirp, err := cfg.validateChirp(resp, req)
 	if err != nil {
 		respondWithError(resp, 400, fmt.Sprintf("chirp validation failed: %v", err))
+		return
 	}
 
 	defer req.Body.Close()
 	user_id, err := uuid.Parse(cleanChirp["user_id"])
 	if err != nil {
 		respondWithError(resp, 400, "error with userId")
+		return
 	}
 	newChirp := database.CreateChirpParams{
 		Body:   cleanChirp["cleaned_body"],
@@ -142,6 +178,7 @@ func (cfg *apiConfig) createChirpHandler(resp http.ResponseWriter, req *http.Req
 	dbChirp, err := cfg.dbQueries.CreateChirp(req.Context(), newChirp)
 	if err != nil {
 		respondWithError(resp, 500, "issue with creating chirp")
+		return
 	}
 	chirp := Chirp{
 		ID:        dbChirp.ID,
@@ -153,6 +190,7 @@ func (cfg *apiConfig) createChirpHandler(resp http.ResponseWriter, req *http.Req
 	finalChirp, err := json.Marshal(chirp)
 	if err != nil {
 		respondWithError(resp, 500, "issue with marshalling")
+		return
 	}
 	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(201)
@@ -162,7 +200,7 @@ func (cfg *apiConfig) createChirpHandler(resp http.ResponseWriter, req *http.Req
 func (cfg *apiConfig) getChirpsHandler(resp http.ResponseWriter, req *http.Request) {
 	chirps, err := cfg.dbQueries.GetChirps(req.Context())
 	if err != nil {
-		respondWithError(resp, 500, fmt.Sprintf("error getting chirps: %w", err))
+		respondWithError(resp, 500, fmt.Sprintf("error getting chirps: %v", err))
 	}
 	chirpsResp := []Chirp{}
 	for _, chirp := range chirps {
@@ -211,8 +249,9 @@ func (cfg *apiConfig) getChirpHandler(resp http.ResponseWriter, req *http.Reques
 }
 
 type LoginParams struct {
-	Password string `json:"password"`
-	Email    string `json:"email`
+	Password           string `json:"password"`
+	Email              string `json:"email"`
+	Expires_In_Seconds int    `json:"expires_in_seconds"`
 }
 
 func (cfg *apiConfig) loginUser(resp http.ResponseWriter, req *http.Request) {
@@ -224,6 +263,11 @@ func (cfg *apiConfig) loginUser(resp http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer req.Body.Close()
+	expires := time.Duration(loginUser.Expires_In_Seconds) * time.Second
+	if expires == 0 || expires > time.Hour {
+		expires = time.Hour
+	}
+
 	user, err := cfg.dbQueries.GetUserByEmail(req.Context(), loginUser.Email)
 	if err != nil {
 		respondWithError(resp, 401, "incorrect email or password")
@@ -234,11 +278,13 @@ func (cfg *apiConfig) loginUser(resp http.ResponseWriter, req *http.Request) {
 		respondWithError(resp, 401, "incorrect email or password")
 		return
 	}
+	token, err := auth.MakeJWT(user.ID, cfg.jwtSecret, expires)
 	User := UserLogin{
 		ID:        user.ID,
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 		Email:     user.Email,
+		Token:     token,
 	}
 	dat, err := json.Marshal(User)
 	if err != nil {

@@ -19,6 +19,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries      *database.Queries
 	platform       string
+	jwtSecret      string
 }
 
 type User struct {
@@ -34,6 +35,7 @@ type UserLogin struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Token     string    `json:"token"`
 }
 
 type Chirp struct {
@@ -50,6 +52,7 @@ func main() {
 		log.Fatalf("error loading .env file: %v", err)
 	}
 	dbURL := os.Getenv("DB_URL")
+	jwtSecret := os.Getenv("JWT_Secret")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatalf("error connecting to db: %v", err)
@@ -57,6 +60,7 @@ func main() {
 	dbQueries := database.New(db)
 	var apiCfg apiConfig
 	apiCfg.dbQueries = dbQueries
+	apiCfg.jwtSecret = jwtSecret
 	platform := os.Getenv("PLATFORM")
 	apiCfg.platform = platform
 	customHandler := http.NewServeMux()
