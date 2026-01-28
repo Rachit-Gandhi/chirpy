@@ -27,15 +27,15 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
-	Password  string    `json:"password"`
 }
 
 type UserLogin struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
-	Token     string    `json:"token"`
+	ID           uuid.UUID `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	AccessToken  string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
 }
 
 type Chirp struct {
@@ -70,6 +70,8 @@ func main() {
 	customHandler.HandleFunc("POST /admin/reset", apiCfg.resetAdminHandler)
 	customHandler.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
 	customHandler.HandleFunc("POST /api/login", apiCfg.loginUser)
+	customHandler.HandleFunc("POST /api/refresh", apiCfg.refreshToken)
+	customHandler.HandleFunc("POST /api/revoke", apiCfg.revokeRefresh)
 	customHandler.HandleFunc("POST /api/users", apiCfg.createUserHandler)
 	customHandler.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
 	customHandler.HandleFunc("GET /api/chirps/{chirpId}", apiCfg.getChirpHandler)

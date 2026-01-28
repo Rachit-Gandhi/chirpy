@@ -84,7 +84,7 @@ func respondWithError(resp http.ResponseWriter, errorCode int, errorMessage stri
 	resp.Write(dat)
 }
 
-func (cfg *apiConfig) validateChirp(resp http.ResponseWriter, req *http.Request) (map[string]string, error) {
+func (cfg *apiConfig) validateChirp(req *http.Request) (map[string]string, error) {
 	jwtSecret := cfg.jwtSecret
 	token, err := auth.GetBearerToken(req.Header)
 	if err != nil {
@@ -146,7 +146,6 @@ func (cfg *apiConfig) createUserHandler(resp http.ResponseWriter, req *http.Requ
 		CreatedAt: dbUser.CreatedAt,
 		UpdatedAt: dbUser.UpdatedAt,
 		Email:     dbUser.Email,
-		Password:  dbUser.HashedPassword,
 	}
 	dat, err := json.Marshal(user)
 	if err != nil {
@@ -159,9 +158,9 @@ func (cfg *apiConfig) createUserHandler(resp http.ResponseWriter, req *http.Requ
 }
 
 func (cfg *apiConfig) createChirpHandler(resp http.ResponseWriter, req *http.Request) {
-	cleanChirp, err := cfg.validateChirp(resp, req)
+	cleanChirp, err := cfg.validateChirp(req)
 	if err != nil {
-		respondWithError(resp, 400, fmt.Sprintf("chirp validation failed: %v", err))
+		respondWithError(resp, 401, fmt.Sprintf("chirp validation failed: %v", err))
 		return
 	}
 
@@ -249,9 +248,8 @@ func (cfg *apiConfig) getChirpHandler(resp http.ResponseWriter, req *http.Reques
 }
 
 type LoginParams struct {
-	Password           string `json:"password"`
-	Email              string `json:"email"`
-	Expires_In_Seconds int    `json:"expires_in_seconds"`
+	Password string `json:"password"`
+	Email    string `json:"email"`
 }
 
 func (cfg *apiConfig) loginUser(resp http.ResponseWriter, req *http.Request) {
@@ -263,10 +261,7 @@ func (cfg *apiConfig) loginUser(resp http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer req.Body.Close()
-	expires := time.Duration(loginUser.Expires_In_Seconds) * time.Second
-	if expires == 0 || expires > time.Hour {
-		expires = time.Hour
-	}
+	expires := time.Hour
 
 	user, err := cfg.dbQueries.GetUserByEmail(req.Context(), loginUser.Email)
 	if err != nil {
@@ -278,20 +273,90 @@ func (cfg *apiConfig) loginUser(resp http.ResponseWriter, req *http.Request) {
 		respondWithError(resp, 401, "incorrect email or password")
 		return
 	}
-	token, err := auth.MakeJWT(user.ID, cfg.jwtSecret, expires)
+	access_token, err := auth.MakeJWT(user.ID, cfg.jwtSecret, expires)
+	if err != nil {
+		respondWithError(resp, 500, "error generating jwt token")
+		return
+	}
+	refresh_token, err := auth.MakeRefreshToken()
+	if err != nil {
+		respondWithError(resp, 500, "error generating refresh token")
+		return
+	}
 	User := UserLogin{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
-		Token:     token,
+		ID:           user.ID,
+		CreatedAt:    user.CreatedAt,
+		UpdatedAt:    user.UpdatedAt,
+		Email:        user.Email,
+		AccessToken:  access_token,
+		RefreshToken: refresh_token,
 	}
 	dat, err := json.Marshal(User)
 	if err != nil {
 		respondWithError(resp, 401, "incorrect email or password")
 		return
 	}
+	now := time.Now()
+	expires_refresh := now.AddDate(0, 0, 60)
+	createRefresh := database.CreateRefreshParams{
+		UserID:    user.ID,
+		Token:     refresh_token,
+		ExpiresAt: expires_refresh,
+	}
+	cfg.dbQueries.CreateRefresh(context.Background(), createRefresh)
 	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(200)
 	resp.Write(dat)
+}
+
+func (cfg *apiConfig) refreshToken(resp http.ResponseWriter, req *http.Request) {
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		respondWithError(resp, 401, "refresh token not found")
+		return
+	}
+	user, err := cfg.dbQueries.GetUserByRefreshToken(req.Context(), token)
+	if err != nil {
+		respondWithError(resp, 401, "invalid refresh token")
+		return
+	}
+	if user.RevokedAt.Valid {
+		respondWithError(resp, 401, "error token is revoked")
+		return
+	}
+	expires := time.Hour
+	access_token, err := auth.MakeJWT(user.UserID, cfg.jwtSecret, expires)
+	if err != nil {
+		respondWithError(resp, 500, "error generating jwt token")
+		return
+	}
+	type newAccessToken struct {
+		Token string `json:"token"`
+	}
+	newToken := newAccessToken{
+		Token: access_token,
+	}
+	dat, err := json.Marshal(newToken)
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write(dat)
+}
+
+func (cfg *apiConfig) revokeRefresh(resp http.ResponseWriter, req *http.Request) {
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		respondWithError(resp, 401, "refresh token not found")
+		return
+	}
+	user, err := cfg.dbQueries.GetUserByRefreshToken(req.Context(), token)
+	if user.RevokedAt.Valid {
+		respondWithError(resp, 401, "error token is revoked")
+		return
+	}
+	err = cfg.dbQueries.RevokeRefresh(req.Context(), token)
+	if err != nil {
+		respondWithError(resp, 500, "error revoking refresh")
+		return
+	}
+	resp.WriteHeader(204)
 }
