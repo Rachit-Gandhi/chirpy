@@ -23,10 +23,11 @@ type apiConfig struct {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
+	ID          uuid.UUID `json:"id"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	Email       string    `json:"email"`
+	IsChirpyRed bool      `json:"is_chirpy_red"`
 }
 
 type UserLogin struct {
@@ -36,6 +37,7 @@ type UserLogin struct {
 	Email        string    `json:"email"`
 	AccessToken  string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
+	IsChirpyRed  bool      `json:"is_chirpy_red"`
 }
 
 type Chirp struct {
@@ -70,11 +72,15 @@ func main() {
 	customHandler.HandleFunc("POST /admin/reset", apiCfg.resetAdminHandler)
 	customHandler.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
 	customHandler.HandleFunc("POST /api/login", apiCfg.loginUser)
+	customHandler.HandleFunc("PUT /api/users", apiCfg.updateUserHandler)
 	customHandler.HandleFunc("POST /api/refresh", apiCfg.refreshToken)
 	customHandler.HandleFunc("POST /api/revoke", apiCfg.revokeRefresh)
 	customHandler.HandleFunc("POST /api/users", apiCfg.createUserHandler)
 	customHandler.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
 	customHandler.HandleFunc("GET /api/chirps/{chirpId}", apiCfg.getChirpHandler)
+	customHandler.HandleFunc("DELETE /api/chirps/{chirpId}", apiCfg.deleteChirpHandler)
+	customHandler.HandleFunc("POST /api/polka/webhooks", apiCfg.polkaWebhookHandler)
+
 	s := &http.Server{
 		Addr:    ":8080",
 		Handler: customHandler,
